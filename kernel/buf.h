@@ -4,9 +4,11 @@ struct buf {
   uint dev;
   uint blockno;
   struct sleeplock lock;
+  struct spinlock guard;
   uint refcnt;
-  struct buf *prev; // LRU cache list
   struct buf *next;
+  uint  last_used;
+  uint  bucketno;
   uchar data[BSIZE];
 };
 
