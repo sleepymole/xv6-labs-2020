@@ -152,6 +152,22 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 }
 
+int
+nproc(void)
+{
+  int n = 0;
+  struct proc *p;
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state != UNUSED) {
+      n++;
+    }
+    release(&p->lock);
+  }
+  return n;
+}
+
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
 pagetable_t
@@ -290,6 +306,7 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+  np->mask = p->mask;
 
   pid = np->pid;
 
