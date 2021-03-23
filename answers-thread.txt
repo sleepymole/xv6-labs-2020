@@ -1,0 +1,5 @@
+Why are there missing keys with 2 threads, but not with 1 thread?
+Because the two threads write to the same entry concurrently.
+During insert, two threads hold the same entry p and construct two
+entries to asign to p. At last, only one entry can be saved, the other entry
+will be lost instead.
