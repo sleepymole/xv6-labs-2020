@@ -68,9 +68,23 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    int ok = 0;
+    do {
+      if (r_scause() != 13 && r_scause() != 15)
+        break;
+      uint64 addr = r_stval();
+      uint64 vm0 = PGROUNDDOWN(addr);
+      pte_t *pte = walk(p->pagetable, vm0, 0);
+      if (pte != 0 && (*pte & PTE_V))
+        break;
+      if (proc_lazymmap(p, addr) == 0)
+        ok = 1;
+    } while (0);
+    if (!ok) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)

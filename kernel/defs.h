@@ -89,6 +89,8 @@ int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
 void            proc_freepagetable(pagetable_t, uint64);
+int             proc_lazymmap(struct proc *, uint64);
+int             proc_munmap(struct proc *, uint64, uint);
 int             kill(int);
 struct cpu*     mycpu(void);
 struct cpu*     getmycpu(void);
@@ -134,6 +136,7 @@ char*           strncpy(char*, const char*, int);
 
 // syscall.c
 int             argint(int, int*);
+uint            arguint(int, uint*);
 int             argstr(int, char*, int);
 int             argaddr(int, uint64 *);
 int             fetchstr(uint64, char*, int);
@@ -167,6 +170,7 @@ int             uvmcopy(pagetable_t, pagetable_t, uint64);
 void            uvmfree(pagetable_t, uint64);
 void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
+pte_t *         walk(pagetable_t, uint64, int);
 uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);

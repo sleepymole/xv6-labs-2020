@@ -8,9 +8,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "stat.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "fcntl.h"
 #include "fs.h"
 #include "sleeplock.h"
 #include "file.h"
@@ -483,4 +485,52 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void) {
+  uint64 addr;
+  uint off, length;
+  int prot, flags;
+  struct file *f;
+  if (argaddr(0, &addr) < 0 || arguint(1, &length) < 0 ||
+      argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 ||
+      arguint(5, &off) < 0)
+    return -1;
+  if (addr != 0 || off % PGSIZE + length > MAXMMAPSIZE)
+    return -1;
+  if ((prot & PROT_READ) && !f->readable)
+    return -1;
+  if((prot & PROT_WRITE) && (flags & MAP_SHARED) && !f->writable)
+    return -1;
+
+  struct proc *p = myproc();
+  for (int i = 0; i < NMMAP; i++) {
+    if (p->vma[i].start == 0) {
+      p->vma[i].start = MMAPSTART(i, NPROC) + off % PGSIZE;
+      p->vma[i].end = p->vma[i].start + length;
+      p->vma[i].flags = PTE_U;
+      p->vma[i].f = filedup(f);
+      p->vma[i].off = off;
+      if (flags & MAP_SHARED)
+        p->vma[i].shared = 1;
+      if (prot & PROT_READ)
+        p->vma[i].flags |= PTE_R;
+      if (prot & PROT_WRITE)
+        p->vma[i].flags |= PTE_W;
+      if (prot & PROT_EXEC)
+        p->vma[i].flags |= PTE_X;
+      return p->vma[i].start;
+    }
+  }
+  return -1;
+}
+
+uint64
+sys_munmap(void) {
+  uint64 addr;
+  uint length;
+  if ((argaddr(0, &addr) < 0) || arguint(1, &length) < 0)
+    return -1;
+  return proc_munmap(myproc(), addr, length);
 }

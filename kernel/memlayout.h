@@ -65,3 +65,6 @@
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+#define MAXMMAPSIZE (128 * 1024 * 1024)
+#define MMAPSTART(i, nproc) (KSTACK(nproc) - ((i) + 1) * MAXMMAPSIZE)

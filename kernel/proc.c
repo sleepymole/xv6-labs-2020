@@ -3,7 +3,11 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "file.h"
 #include "defs.h"
 
 struct cpu cpus[NCPU];
@@ -202,6 +206,95 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+// Lazily mmap file contents to virtual memory.
+int
+proc_lazymmap(struct proc *p, uint64 addr) {
+  for (int i = 0; i < NMMAP; i++) {
+    struct vmarea *vma = &p->vma[i];
+    if (vma->start == 0)
+      continue;
+    if (addr < vma->start || addr >= vma->end)
+      continue;
+
+    uint64 pa = (uint64)kalloc();
+    if (pa == 0)
+      return -1;
+    memset((void *)pa, 0, PGSIZE);
+    uint64 vm0 = PGROUNDDOWN(addr);
+    uint64 l = vm0;
+    if (l < vma->start)
+      l = vma->start;
+    uint64 r = vm0 + PGSIZE;
+    if (r > vma->end)
+      r = vma->end;
+    ilock(vma->f->ip);
+    if (readi(vma->f->ip, 0, pa + l - vm0, vma->off + l - vma->start, r - l) < 0) {
+      iunlock(vma->f->ip);
+      kfree((void *)pa);
+      return -1;
+    }
+    iunlock(vma->f->ip);
+    if (mappages(p->pagetable, vm0, PGSIZE, pa, vma->flags) < 0) {
+      kfree((void *)pa);
+      return -1;
+    }
+    return 0;
+  }
+  return -1;
+}
+
+int
+proc_munmap(struct proc *p, uint64 addr, uint length) {
+  for (int i = 0; i < NMMAP; i++) {
+    struct vmarea *vma = &p->vma[i];
+    if (vma->start == 0)
+      continue;
+    if (addr < vma->start || addr >= vma->end)
+      continue;
+    if (vma->start < addr && vma->end - addr < length)
+      return -1;
+    for (uint64 vm0 = PGROUNDDOWN(addr); vm0 < addr + length; vm0 += PGSIZE) {
+      pte_t *pte = walk(p->pagetable, vm0, 0);
+      if (pte == 0 || !(*pte & PTE_V))
+        continue;
+      uint64 pa0 = PTE2PA(*pte);
+      uint64 l = vm0;
+      if (l < addr)
+        l = addr;
+      uint64 r = vm0 + PGSIZE;
+      if (r > addr + length)
+        r = addr + length;
+      if (vma->shared && (*pte & PTE_D)) {
+        begin_op();
+        ilock(vma->f->ip);
+        if (writei(vma->f->ip, 0, pa0 + l - vm0, vma->off + l - vma->start, r - l) < 0) {
+          iunlock(vma->f->ip);
+          end_op();
+          return -1;
+        }
+        iunlock(vma->f->ip);
+        end_op();
+      }
+      memset((void *)(pa0 + l - vm0), 0, r - l);
+      if (!((vm0 < addr && vma->start < addr) ||
+            (vm0 + PGSIZE > addr + length && addr + length < vma->end))) {
+        kfree((void *)pa0);
+        *pte = 0;
+      }
+    }
+    if (addr == vma->start)
+      vma->start += length;
+    if (addr + length == vma->end)
+      vma->end = addr;
+    if (vma->start >= vma->end) {
+      fileclose(vma->f);
+      memset(vma, 0, sizeof(struct vmarea));
+    }
+    return 0;
+  }
+  return -1;
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -298,6 +391,33 @@ fork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  // Copy vm areas from parent.
+  for (i = 0; i < NMMAP; i++) {
+    struct vmarea *vma = &p->vma[i];
+    if (vma->start > 0) {
+      np->vma[i] = *vma;
+      filedup(vma->f);
+      for (uint64 vm0 = PGROUNDDOWN(vma->start); vm0 < vma->end; vm0 += PGSIZE) {
+        pte_t *pte = walk(p->pagetable, vm0, 0);
+        if (pte == 0 || !(*pte & PTE_V))
+          continue;
+        char *mem = kalloc();
+        if (mem == 0) {
+          proc_munmap(np, vma->start, vma->end - vma->start);
+          return -1;
+        }
+        uint64 pa = PTE2PA(*pte);
+        memmove(mem, (char *)pa, PGSIZE);
+        int flags = PTE_FLAGS(*pte);
+        if (mappages(np->pagetable, vm0, PGSIZE, (uint64)mem, flags) != 0) {
+          kfree(mem);
+          proc_munmap(np, vma->start, vma->end - vma->start);
+          return -1;
+        }
+      }
+    }
+  }
+
   pid = np->pid;
 
   np->state = RUNNABLE;
@@ -350,6 +470,14 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+  // Release all vm areas.
+  for (int i = 0; i < NMMAP; i++) {
+    struct vmarea *vma = &p->vma[i];
+    if (vma->start > 0) {
+      if (proc_munmap(p, vma->start, vma->end - vma->start) < 0)
+        panic("exit: proc_munmap");
     }
   }
 
